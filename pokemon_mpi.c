@@ -271,13 +271,13 @@ int main(int argc, char *argv[]) {
     /* Rank 0 prepara el archivo CSV de salida */
     FILE *fout = NULL;
     if (rank == 0) {
-        fout = fopen(out_path, "w");
+        fout = fopen(out_path, "a");
         if (!fout) { perror("fopen output"); MPI_Finalize(); return 1; }
-        fprintf(fout, "corrida,procesos,iteraciones,"
+        /*fprintf(fout, "procesos,"
                       "wall_max_s,wall_min_s,wall_avg_s,"
                       "user_max_s,user_min_s,user_avg_s,"
                       "sys_max_s,sys_min_s,sys_avg_s,"
-                      "cpu_wall_pct_avg\n");
+                      "cpu_wall_pct_avg\n");*/
         srand((unsigned)time(NULL));
         printf("Corridas: %d  |  Iter/corrida: %d  |  Procesos: %d\n",
                num_corridas, iter_count, nprocs);
@@ -370,12 +370,12 @@ int main(int argc, char *argv[]) {
                    sys_max,  sys_min,  sys_avg);
             printf("  CPU/Wall avg = %.3f %%\n\n", cpu_pct_avg);
 
-            fprintf(fout, "%d,%d,%d,"
+            fprintf(fout, "%d,"
                           "%.6f,%.6f,%.6f,"
                           "%.6f,%.6f,%.6f,"
                           "%.6f,%.6f,%.6f,"
                           "%.3f\n",
-                    c + 1, nprocs, iter_count,
+                    nprocs,
                     wall_max, wall_min, wall_avg,
                     user_max, user_min, user_avg,
                     sys_max,  sys_min,  sys_avg,
