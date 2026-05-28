@@ -398,8 +398,8 @@ int main(int argc, char *argv[]) {
             double t_avg = t_sum / nprocs;
             printf("t_max=%.4fs  t_min=%.4fs  t_avg=%.4fs\n",
                    t_max, t_min, t_avg);
-            fprintf(fout, "%d,%d,%d,%.6f,%.6f,%.6f\n",
-                    c + 1, nprocs, iter_count, t_max, t_min, t_avg);
+            fprintf(fout, "%d,%.6f,%.6f,%.6f\n",
+                     nprocs, t_max, t_min, t_avg);
             fflush(fout);
         }
 
