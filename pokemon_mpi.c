@@ -2,10 +2,10 @@
  * pokemon_mpi.c
  *
  * Compilar:
- *   mpicc -O2 -o pokemon_mpi pokemon_mpi.c -lm
+ *   mpicc -O2 -o pokemon_mpi pokemon_mpi.c Timming.c -lm
  *
- * Ejecutar (ej. 4 procesos, 100 iteraciones):
- *   mpirun -np 4 ./pokemon_mpi pokemon.csv 100
+ * Ejecutar (ej. 8 procesos, 10000 iter, 5 corridas):
+ *   mpirun -np 8 --hostfile hostfile.txt ./pokemon_mpi pokemon.csv 10000 5 metricas.csv
  *
  * Cada proceso recibe un subconjunto de índices aleatorios y ejecuta
  * pokeSearch() de forma independiente. El rank 0 recolecta y reporta.
@@ -40,6 +40,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "Timming.h"
 
 /* ─── Constantes ─────────────────────────────────────────────── */
 #define MAX_POKEMON   1100
@@ -211,8 +212,8 @@ static void pokeSearch(int pk_idx,
 
     for (int i = 0; i < pokedex_size; i++) {
         const Pokemon *other = &pokedex[i];
-        /*if (other->total < ts - STAT_WINDOW || other->total > ts + STAT_WINDOW)
-		continue;*/
+        if (other->total < ts - STAT_WINDOW || other->total > ts + STAT_WINDOW)
+            continue;
         pl[pl_n].idx   = i;
         pl[pl_n].score = calcular(me, other);
         pl_n++;
@@ -232,71 +233,6 @@ static void pokeSearch(int pk_idx,
 }
 
 /* ─── Main con MPI ───────────────────────────────────────────── */
-/*
- * run_corrida: ejecuta una corrida de iter_count iteraciones y devuelve
- * el tiempo máximo entre todos los procesos. Solo rank 0 recibe el valor real.
- */
-static double run_corrida(int iter_count, int nprocs, int rank) {
-
-    /* Construimos sendcounts y displs */
-    int *sendcounts = malloc(nprocs * sizeof(int));
-    int *displs     = malloc(nprocs * sizeof(int));
-    int base  = iter_count / nprocs;
-    int extra = iter_count % nprocs;
-    int offset = 0;
-    for (int r = 0; r < nprocs; r++) {
-        sendcounts[r] = base + (r < extra ? 1 : 0);
-        displs[r]     = offset;
-        offset       += sendcounts[r];
-    }
-
-    /* Rank 0 genera índices aleatorios */
-    int *all_indices = NULL;
-    if (rank == 0) {
-        all_indices = malloc(iter_count * sizeof(int));
-        for (int i = 0; i < iter_count; i++)
-            all_indices[i] = rand() % pokedex_size;
-    }
-
-    /* Distribuir índices */
-    int my_count = sendcounts[rank];
-    int *my_indices = malloc(my_count * sizeof(int));
-    MPI_Scatterv(all_indices, sendcounts, displs, MPI_INT,
-                 my_indices,  my_count,            MPI_INT,
-                 0, MPI_COMM_WORLD);
-
-    /* Cómputo */
-    double t_start = MPI_Wtime();
-    for (int i = 0; i < my_count; i++) {
-        int best[TOP_N], worst[TOP_N];
-        pokeSearch(my_indices[i], best, worst);
-    }
-    double t_local = MPI_Wtime() - t_start;
-
-    /* Reducir a rank 0 */
-    double t_max, t_min, t_sum;
-    MPI_Reduce(&t_local, &t_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&t_local, &t_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&t_local, &t_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    /* Rank 0 imprime y escribe en CSV */
-    if (rank == 0) {
-        double t_avg = t_sum / nprocs;
-        printf("  t_max=%.4f  t_min=%.4f  t_avg=%.4f\n", t_max, t_min, t_avg);
-        /* devolver t_max para que el caller lo guarde */
-        free(all_indices);
-        free(my_indices);
-        free(sendcounts);
-        free(displs);
-        return t_max;   /* valor usado por el caller para el CSV */
-    }
-
-    free(my_indices);
-    free(sendcounts);
-    free(displs);
-    return 0.0;  /* no usado en ranks > 0 */
-}
-
 int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
 
@@ -305,10 +241,10 @@ int main(int argc, char *argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
     /*
-     * Argumentos: csv_path  iteraciones_por_corrida  num_corridas  output.csv
+     * Argumentos: csv_path  iter_por_corrida  num_corridas  output.csv
      *
      * Ejemplo:
-     *   mpirun -np 8 ./pokemon_mpi pokemon.csv 10000 5 metricas.csv
+     *   mpirun -np 8 --hostfile hostfile.txt ./pokemon_mpi pokemon.csv 10000 5 metricas.csv
      */
     if (argc < 5) {
         if (rank == 0)
@@ -319,10 +255,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    const char *csv_path    = argv[1];
-    int         iter_count  = atoi(argv[2]);
-    int         num_corridas= atoi(argv[3]);
-    const char *out_path    = argv[4];
+    const char *csv_path     = argv[1];
+    int         iter_count   = atoi(argv[2]);
+    int         num_corridas = atoi(argv[3]);
+    const char *out_path     = argv[4];
 
     /* Todos los procesos cargan el CSV */
     pokedex_size = load_csv(csv_path);
@@ -335,9 +271,13 @@ int main(int argc, char *argv[]) {
     /* Rank 0 prepara el archivo CSV de salida */
     FILE *fout = NULL;
     if (rank == 0) {
-        fout = fopen(out_path, "a");
+        fout = fopen(out_path, "w");
         if (!fout) { perror("fopen output"); MPI_Finalize(); return 1; }
-        //fprintf(fout, "corrida,procesos,iteraciones,t_max_s,t_min_s,t_avg_s\n");
+        fprintf(fout, "corrida,procesos,iteraciones,"
+                      "wall_max_s,wall_min_s,wall_avg_s,"
+                      "user_max_s,user_min_s,user_avg_s,"
+                      "sys_max_s,sys_min_s,sys_avg_s,"
+                      "cpu_wall_pct_avg\n");
         srand((unsigned)time(NULL));
         printf("Corridas: %d  |  Iter/corrida: %d  |  Procesos: %d\n",
                num_corridas, iter_count, nprocs);
@@ -346,13 +286,13 @@ int main(int argc, char *argv[]) {
     /* ── Loop de corridas ── */
     for (int c = 0; c < num_corridas; c++) {
 
-        /* Sincronizar todos antes de cada corrida */
         MPI_Barrier(MPI_COMM_WORLD);
 
-        if (rank == 0)
-            printf("[corrida %d/%d] ", c + 1, num_corridas);
+        /* Tomar tiempo de inicio (cada proceso por separado) */
+        double utime0, stime0, wtime0;
+        uswtime(&utime0, &stime0, &wtime0);
 
-        /* Construimos sendcounts y displs */
+        /* ── Distribuir trabajo ── */
         int *sendcounts = malloc(nprocs * sizeof(int));
         int *displs     = malloc(nprocs * sizeof(int));
         int base  = iter_count / nprocs;
@@ -364,7 +304,6 @@ int main(int argc, char *argv[]) {
             offset       += sendcounts[r];
         }
 
-        /* Rank 0 genera índices */
         int *all_indices = NULL;
         if (rank == 0) {
             all_indices = malloc(iter_count * sizeof(int));
@@ -372,34 +311,75 @@ int main(int argc, char *argv[]) {
                 all_indices[i] = rand() % pokedex_size;
         }
 
-        /* Distribuir */
         int my_count = sendcounts[rank];
         int *my_indices = malloc(my_count * sizeof(int));
         MPI_Scatterv(all_indices, sendcounts, displs, MPI_INT,
                      my_indices,  my_count,            MPI_INT,
                      0, MPI_COMM_WORLD);
 
-        /* Cómputo */
-        double t_start = MPI_Wtime();
+        /* ── Cómputo ── */
         for (int i = 0; i < my_count; i++) {
             int best[TOP_N], worst[TOP_N];
             pokeSearch(my_indices[i], best, worst);
         }
-        double t_local = MPI_Wtime() - t_start;
 
-        /* Reducir métricas a rank 0 */
-        double t_max, t_min, t_sum;
-        MPI_Reduce(&t_local, &t_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-        MPI_Reduce(&t_local, &t_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-        MPI_Reduce(&t_local, &t_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        /* Tomar tiempo de fin */
+        double utime1, stime1, wtime1;
+        uswtime(&utime1, &stime1, &wtime1);
 
-        /* Rank 0 escribe y reporta */
-	if (rank == 0) {
-            double t_avg = t_sum / nprocs;
-            printf("t_max=%.4fs  t_min=%.4fs  t_avg=%.4fs\n",
-                   t_max, t_min, t_avg);
-            fprintf(fout, "%d,%.6f,%.6f,%.6f\n",
-                     nprocs, t_max, t_min, t_avg);
+        /* Deltas locales */
+        double d_wall = wtime1 - wtime0;
+        double d_user = utime1 - utime0;
+        double d_sys  = stime1 - stime0;
+        /* CPU/Wall% local: evitar división por cero */
+        double d_cpu_pct = (d_wall > 1e-9)
+                           ? 100.0 * (d_user + d_sys) / d_wall
+                           : 0.0;
+
+        /* ── Reducir métricas a rank 0 ── */
+        double wall_max, wall_min, wall_sum;
+        double user_max, user_min, user_sum;
+        double sys_max,  sys_min,  sys_sum;
+        double cpu_sum;
+
+        MPI_Reduce(&d_wall,    &wall_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_wall,    &wall_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_wall,    &wall_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_user,    &user_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_user,    &user_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_user,    &user_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_sys,     &sys_max,  1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_sys,     &sys_min,  1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_sys,     &sys_sum,  1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&d_cpu_pct, &cpu_sum,  1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+        /* ── Rank 0: imprimir y guardar ── */
+        if (rank == 0) {
+            double wall_avg    = wall_sum / nprocs;
+            double user_avg    = user_sum / nprocs;
+            double sys_avg     = sys_sum  / nprocs;
+            double cpu_pct_avg = cpu_sum  / nprocs;
+
+            printf("[corrida %d/%d]\n", c + 1, num_corridas);
+            printf("  Benchmarks (seg):\n");
+            printf("  real  max=%.3f  min=%.3f  avg=%.3f\n",
+                   wall_max, wall_min, wall_avg);
+            printf("  user  max=%.3f  min=%.3f  avg=%.3f\n",
+                   user_max, user_min, user_avg);
+            printf("  sys   max=%.3f  min=%.3f  avg=%.3f\n",
+                   sys_max,  sys_min,  sys_avg);
+            printf("  CPU/Wall avg = %.3f %%\n\n", cpu_pct_avg);
+
+            fprintf(fout, "%d,%d,%d,"
+                          "%.6f,%.6f,%.6f,"
+                          "%.6f,%.6f,%.6f,"
+                          "%.6f,%.6f,%.6f,"
+                          "%.3f\n",
+                    c + 1, nprocs, iter_count,
+                    wall_max, wall_min, wall_avg,
+                    user_max, user_min, user_avg,
+                    sys_max,  sys_min,  sys_avg,
+                    cpu_pct_avg);
             fflush(fout);
         }
 
