@@ -4,7 +4,7 @@
  * Compilar:
  *   mpicc -O2 -o pokemon_mpi pokemon_mpi.c Timming.c -lm
  *
- * Ejecutar (ej. 8 procesos, 10000 iter, 5 corridas):
+ * Ejecutar (ej. 8 procesos, 10000 iter, 5 rondas):
  *   mpirun -np 8 --hostfile hostfile.txt ./pokemon_mpi pokemon.csv 10000 5 metricas.csv
  *
  * Cada proceso recibe un subconjunto de índices aleatorios y ejecuta
@@ -241,7 +241,7 @@ int main(int argc, char *argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
     /*
-     * Argumentos: csv_path  iter_por_corrida  num_corridas  output.csv
+     * Argumentos: csv_path  iter_por_ronda  num_rondas  output.csv
      *
      * Ejemplo:
      *   mpirun -np 8 --hostfile hostfile.txt ./pokemon_mpi pokemon.csv 10000 5 metricas.csv
@@ -249,7 +249,7 @@ int main(int argc, char *argv[]) {
     if (argc < 5) {
         if (rank == 0)
             fprintf(stderr,
-                "Uso: %s <pokemon.csv> <iter_por_corrida> <num_corridas> <output.csv>\n",
+                "Uso: %s <pokemon.csv> <iter_por_ronda> <num_rondas> <output.csv>\n",
                 argv[0]);
         MPI_Finalize();
         return 1;
@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
 
     const char *csv_path     = argv[1];
     int         iter_count   = atoi(argv[2]);
-    int         num_corridas = atoi(argv[3]);
+    int         num_rondas = atoi(argv[3]);
     const char *out_path     = argv[4];
 
     /* Todos los procesos cargan el CSV */
@@ -279,12 +279,12 @@ int main(int argc, char *argv[]) {
                       "sys_max_s,sys_min_s,sys_avg_s,"
                       "cpu_wall_pct_avg\n");*/
         srand((unsigned)time(NULL));
-        printf("Corridas: %d  |  Iter/corrida: %d  |  Procesos: %d\n",
-               num_corridas, iter_count, nprocs);
+        printf("rondas: %d  |  Iter/ronda: %d  |  Procesos: %d\n",
+               num_rondas, iter_count, nprocs);
     }
 
-    /* ── Loop de corridas ── */
-    for (int c = 0; c < num_corridas; c++) {
+    /* ── Loop de rondas ── */
+    for (int c = 0; c < num_rondas; c++) {
 
         MPI_Barrier(MPI_COMM_WORLD);
 
@@ -360,7 +360,7 @@ int main(int argc, char *argv[]) {
             double sys_avg     = sys_sum  / nprocs;
             double cpu_pct_avg = cpu_sum  / nprocs;
 
-            printf("[corrida %d/%d]\n", c + 1, num_corridas);
+            printf("[ronda %d/%d]\n", c + 1, num_rondas);
             printf("  Benchmarks (seg):\n");
             printf("  real  max=%.3f  min=%.3f  avg=%.3f\n",
                    wall_max, wall_min, wall_avg);
